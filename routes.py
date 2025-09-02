@@ -348,44 +348,87 @@ def export_collection(collection_id):
 @app.route("/import_collection", methods=["POST"])
 @require_login
 def import_collection():
-    """Import collection from JSON"""
+    """Import collection from Postman JSON"""
+    import json
+    from sqlalchemy.exc import SQLAlchemyError
+
     try:
         import_data = request.get_json()
-
-        if not import_data or "name" not in import_data:
-            flash("Invalid collection data", "error")
+        if not import_data or "info" not in import_data or "item" not in import_data:
+            flash("Invalid Postman collection JSON", "error")
             return redirect(url_for("collections"))
 
         # Create collection
         collection = Collection(
-            name=import_data["name"],
-            description=import_data.get("description", ""),
+            name=import_data["info"].get("name", "Imported Collection"),
+            description=import_data["info"].get("description", ""),
             user_id=current_user.id,
         )
         db.session.add(collection)
-        db.session.flush()  # Get ID
+        db.session.flush()  # ensures collection.id is available
 
-        # Import requests
-        for req_data in import_data.get("requests", []):
-            api_request = ApiRequest(
-                name=req_data.get("name", "Imported Request"),
-                method=req_data.get("method", "GET"),
-                url=req_data.get("url", ""),
-                body=req_data.get("body", ""),
-                body_type=req_data.get("body_type", "json"),
-                auth_type=req_data.get("auth_type", ""),
-                collection_id=collection.id,
-            )
+        def process_items(items, parent_id=None):
+            for item in items:
+                if "item" in item:
+                    # Folder in Postman → recurse
+                    process_items(item["item"], parent_id)
+                elif "request" in item:
+                    req = item["request"]
 
-            api_request.set_headers(req_data.get("headers", {}))
-            api_request.set_auth_data(req_data.get("auth_data", {}))
+                    # Extract request data safely
+                    method = req.get("method", "GET").upper()
+                    url_data = req.get("url", {})
+                    url = ""
 
-            db.session.add(api_request)
+                    if isinstance(url_data, str):
+                        url = url_data
+                    elif isinstance(url_data, dict):
+                        url = url_data.get("raw") or "/".join(url_data.get("path", []))
+
+                    headers = {
+                        h.get("key"): h.get("value")
+                        for h in req.get("header", [])
+                        if h.get("key")
+                    }
+
+                    body_type = "none"
+                    body_content = ""
+                    if "body" in req:
+                        body_type = req["body"].get("mode", "none")
+                        if body_type in ("raw", "text"):
+                            body_content = req["body"].get("raw", "")
+                        elif body_type == "urlencoded":
+                            body_content = json.dumps(req["body"].get("urlencoded", []))
+                        elif body_type == "formdata":
+                            body_content = json.dumps(req["body"].get("formdata", []))
+                        elif body_type == "file":
+                            body_content = json.dumps(req["body"].get("file", {}))
+
+                    api_request = ApiRequest(
+                        name=item.get("name", "Imported Request"),
+                        method=method,
+                        url=url,
+                        body=body_content,
+                        body_type=body_type,
+                        auth_type=req.get("auth", {}).get("type", "")
+                        if isinstance(req.get("auth"), dict)
+                        else "",
+                        collection_id=collection.id,
+                    )
+
+                    api_request.set_headers(headers)
+                    if isinstance(req.get("auth"), dict):
+                        api_request.set_auth_data(req["auth"])
+
+                    db.session.add(api_request)
+
+        process_items(import_data["item"])
 
         db.session.commit()
-        flash("Collection imported successfully!", "success")
+        flash("Postman collection imported successfully!", "success")
 
-    except Exception as e:
+    except (SQLAlchemyError, ValueError, KeyError, TypeError) as e:
+        db.session.rollback()
         flash(f"Error importing collection: {str(e)}", "error")
 
     return redirect(url_for("collections"))
