@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-tester
+  labels:
+    app: api-tester
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-tester
+  template:
+    metadata:
+      labels:
+        app: api-tester
+    spec:
+      containers:
+        - name: api-tester
+          image: 500440857146.dkr.ecr.ap-south-1.amazonaws.com/uat_api-tester:IMAGE_TAG
+          imagePullPolicy: Always
+          resources:
+            limits:
+              memory: 800Mi
+              cpu: 200m
+            requests:
+              memory: 800Mi
+              cpu: 200m
+          ports:
+            - containerPort: 80
+      # imagePullSecrets:
+      #   - name: ocirsecret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-tester
+  labels:
+    app: api-tester
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+    #   nodeport :
+  selector:
+    app: api-tester
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-tester
+  annotations:
+    #alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:500440857146:certificate/b3de03e5-d7d0-4378-95ca-3ceec9430545
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/subnets: subnet-0056a6f4d24e236b1, subnet-048d34e762c4a14d8
+    alb.ingress.kubernetes.io/load-balancer-name: 'api-tester'
+    #alb.ingress.kubernetes.io/wafv2-acl-arn: 'arn:aws:wafv2:ap-south-1:500440857146:regional/webacl/pfl-frontend-uat-waf/3c6a4d49-b0c6-431d-adad-27d9e079d27a'
+    alb.ingress.kubernetes.io/ssl-policy: 'ELBSecurityPolicy-TLS13-1-2-2021-06'
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-tester
+                port:
+                  number: 80
